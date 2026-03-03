@@ -45,9 +45,9 @@ def fetch_acs_data(
     artifacts_dir = Path(artifacts_dir)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-    census_api_key = os.getenv("CENSUS_API_KEY")
+    census_api_key = os.getenv("ACS_KEY")
     if not census_api_key:
-        raise RuntimeError("CENSUS_API_KEY not found in environment")
+        raise RuntimeError("ACS_KEY not found in environment")
 
     c = Census(census_api_key)
 
