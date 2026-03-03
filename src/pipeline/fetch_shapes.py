@@ -9,7 +9,7 @@ STATES_TO_REMOVE = {"02", "15", "72"}  # AK, HI, PR
 
 def build_county_shapes(artifacts_dir: str | Path = "artifacts") -> Path:
     artifacts_dir = Path(artifacts_dir)
-    outdir = artifacts_dir / "curated"
+    outdir = artifacts_dir
     outdir.mkdir(parents=True, exist_ok=True)
 
     gdf = gpd.read_file(COUNTY_GEOJSON_URL)

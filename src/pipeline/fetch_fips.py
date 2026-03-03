@@ -10,7 +10,7 @@ FCC_FIPS_URL = "https://transition.fcc.gov/oet/info/maps/census/fips/fips.txt"
 
 def build_fips_tables(artifacts_dir: str | Path = "artifacts") -> tuple[Path, Path]:
     artifacts_dir = Path(artifacts_dir)
-    outdir = artifacts_dir / "curated"
+    outdir = artifacts_dir
     outdir.mkdir(parents=True, exist_ok=True)
 
     r = requests.get(FCC_FIPS_URL, timeout=60)
