@@ -39,7 +39,7 @@ ACS_VARS = {
 
 
 def fetch_acs_data(
-    year: int = 2023,
+    year: int = 2021,
     artifacts_dir: str | Path = "artifacts",
 ) -> Path:
     artifacts_dir = Path(artifacts_dir)
