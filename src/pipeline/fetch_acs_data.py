@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import pandas as pd
 from census import Census
+from dotenv import load_dotenv
 
+
+load_dotenv()  # loads .env into environment
 
 
 ACS_VARS = {
@@ -21,7 +25,7 @@ ACS_VARS = {
     "B25003_003E": "renter_occupied",
     "B08131_001E": "travel_time_to_work",
     "B08301_001E": "means_of_transport",
-    "B992701_001E": "health_insurance_coverage",
+    "B992701_001E": "health_insance_coverage",
     "B99172_001E": "poverty_status_for_families",
     "B29003_001E": "poverty_status",
     "B99281_001E": "household_internet_access",
@@ -34,13 +38,16 @@ ACS_VARS = {
 }
 
 
-def fetch_acs_county(
-    census_api_key: str,
-    year: int = 2021,
+def fetch_acs_data(
+    year: int = 2023,
     artifacts_dir: str | Path = "artifacts",
 ) -> Path:
     artifacts_dir = Path(artifacts_dir)
-    ensure_dir(artifacts_dir)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    census_api_key = os.getenv("CENSUS_API_KEY")
+    if not census_api_key:
+        raise RuntimeError("CENSUS_API_KEY not found in environment")
 
     c = Census(census_api_key)
 
@@ -53,9 +60,16 @@ def fetch_acs_county(
 
     df = pd.DataFrame(data)
     df["year"] = year
-    df["GEO_ID"] = df["state"].astype(str).str.zfill(2) + df["county"].astype(str).str.zfill(3)
+    df["GEO_ID"] = (
+        df["state"].astype(str).str.zfill(2)
+        + df["county"].astype(str).str.zfill(3)
+    )
     df.rename(columns=ACS_VARS, inplace=True)
 
     outpath = artifacts_dir / f"acs_county_{year}.parquet"
     df.to_parquet(outpath, index=False)
     return outpath
+
+
+if __name__ == "__main__":
+    print(fetch_acs_data())
