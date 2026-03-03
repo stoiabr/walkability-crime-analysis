@@ -205,3 +205,27 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# Secrets
+.env
+
+# Raw + processed data
+data/
+artifacts/
+
+# Large data formats
+*.csv
+*.parquet
+*.feather
+*.pkl
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Mac
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
