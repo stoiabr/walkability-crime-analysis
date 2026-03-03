@@ -36,7 +36,7 @@ ACS_VARS = {
 
 def fetch_acs_county(
     census_api_key: str,
-    year: int = 2023,
+    year: int = 2021,
     artifacts_dir: str | Path = "artifacts",
 ) -> Path:
     artifacts_dir = Path(artifacts_dir)

@@ -210,10 +210,6 @@ __marimo__/
 # Secrets
 .env
 
-# Raw + processed data
-data/
-artifacts/
-
 # Large data formats
 *.csv
 *.parquet
@@ -223,6 +219,10 @@ artifacts/
 # Jupyter
 .ipynb_checkpoints/
 
+# data outputs
+data/
+artifacts/
+data/raw/
 # Mac
 .DS_Store
 
