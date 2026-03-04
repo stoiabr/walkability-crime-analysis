@@ -2,6 +2,9 @@
 # from __future__ import annotations
 
 # import argparse
+# import hashlib
+# import json
+# import shutil
 # from pathlib import Path
 
 # import numpy as np
@@ -65,13 +68,24 @@
 # )
 
 
+# def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+#     h = hashlib.sha256()
+#     with path.open("rb") as f:
+#         for chunk in iter(lambda: f.read(chunk_size), b""):
+#             h.update(chunk)
+#     return h.hexdigest()
+
+
+# def _require_cols(df: pd.DataFrame, cols: list[str]) -> None:
+#     missing = [c for c in cols if c not in df.columns]
+#     if missing:
+#         raise ValueError(f"Missing required columns: {missing}")
+
+
 # def transform(tsv_path: Path) -> pd.DataFrame:
-#     df = pd.read_csv(
-#         tsv_path,
-#         sep="\t",
-#         low_memory=False,
-#         usecols=range(77),
-#     )
+#     df = pd.read_csv(tsv_path, sep="\t", low_memory=False, usecols=range(77))
+
+#     _require_cols(df, ["ORI", "OFFENSE"])
 
 #     cols = df.columns[33:77]
 #     jcols = df.columns[22:31]
@@ -93,12 +107,9 @@
 #         .replace({"018": "18", "019": "19"})
 #     )
 
-#     df = df.drop(columns=list(jcols) + list(cols))
+#     df = df.drop(columns=list(jcols) + list(cols), errors="ignore")
 
-#     df = (
-#         df.groupby(["ORI", "OFFENSE"], as_index=False)["TOTAL"]
-#         .sum()
-#     )
+#     df = df.groupby(["ORI", "OFFENSE"], as_index=False)["TOTAL"].sum()
 
 #     df = (
 #         df.merge(CRIMEMAP, left_on="OFFENSE", right_on="value", how="left")
@@ -113,138 +124,156 @@
 #     )
 
 #     df.columns.name = None
-#     return df
+
+#     if df["ORI"].isna().any():
+#         raise ValueError("Null ORI found after transform.")
+#     if df.duplicated(subset=["ORI"]).any():
+#         raise ValueError("Duplicate ORI found after pivot (expected 1 row per ORI).")
+
+#     for c in ["Person", "Property", "Society"]:
+#         if c not in df.columns:
+#             df[c] = 0
+
+#     return df[["ORI", "Person", "Property", "Society"]]
 
 
 # def main() -> None:
 #     p = argparse.ArgumentParser()
 #     p.add_argument("--input", required=True, help="Path to source .tsv")
-#     p.add_argument("--output", default="artifacts/ucr_by_ori.parquet", help="Parquet output path")
+#     p.add_argument("--data-dir", default="data", help="Base data directory (bronze/silver)")
+#     p.add_argument("--force", action="store_true", help="Overwrite outputs if they exist")
 #     args = p.parse_args()
 
 #     in_path = Path(args.input).expanduser().resolve()
-#     out_path = Path(args.output).expanduser()
+#     if not in_path.exists():
+#         raise FileNotFoundError(in_path)
 
-#     out_path.parent.mkdir(parents=True, exist_ok=True)
+#     data_dir = Path(args.data_dir)
+#     bronze_dir = data_dir / "bronze"
+#     silver_dir = data_dir / "silver"
+#     bronze_dir.mkdir(parents=True, exist_ok=True)
+#     silver_dir.mkdir(parents=True, exist_ok=True)
 
-#     result = transform(in_path)
-#     result.to_parquet(out_path, index=False)
+#     bronze_tsv = bronze_dir / in_path.name
+#     silver_out = silver_dir / "crime_by_ori.parquet"
+#     meta_out = silver_dir / "crime_by_ori.meta.json"
+
+#     if bronze_tsv.exists() and not args.force:
+#         pass
+#     else:
+#         shutil.copy2(in_path, bronze_tsv)
+
+#     if silver_out.exists() and not args.force:
+#         return
+
+#     result = transform(bronze_tsv)
+#     result.to_parquet(silver_out, index=False)
+
+#     meta = {
+#         "bronze_tsv": str(bronze_tsv),
+#         "bronze_sha256": _sha256_file(bronze_tsv),
+#         "rows_silver": int(len(result)),
+#         "columns_silver": list(result.columns),
+#     }
+#     meta_out.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
 # if __name__ == "__main__":
 #     main()
 
-# clean_crime.py
+
+"""Transform raw FBI crime TSV into per-ORI crime totals by category."""
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import shutil
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from _utils import ensure_dirs, require_cols
 
-CRIMEMAP = pd.DataFrame(
-    [
-        {"value": "011", "label": "Murder and Non-Negligent Manslaughter", "crime_against": "Person"},
-        {"value": "012", "label": "Manslaughter by Negligence", "crime_against": "Person"},
-        {"value": "020", "label": "Forcible Rape", "crime_against": "Person"},
-        {"value": "030", "label": "Robbery", "crime_against": "Person"},
-        {"value": "040", "label": "Aggravated Assault", "crime_against": "Person"},
-        {"value": "050", "label": "Burglary - Breaking or Entering", "crime_against": "Property"},
-        {"value": "060", "label": "Larceny - Theft (except motor vehicle)", "crime_against": "Property"},
-        {"value": "070", "label": "Motor Vehicle Theft", "crime_against": "Property"},
-        {"value": "080", "label": "Other Assaults", "crime_against": "Person"},
-        {"value": "090", "label": "Arson", "crime_against": "Property"},
-        {"value": "100", "label": "Forgery and Counterfeiting", "crime_against": "Property"},
-        {"value": "110", "label": "Fraud", "crime_against": "Property"},
-        {"value": "120", "label": "Embezzlement", "crime_against": "Property"},
-        {"value": "130", "label": "Stolen property \"Buying, Receiving, Poss.\"", "crime_against": "Property"},
-        {"value": "140", "label": "Vandalism", "crime_against": "Property"},
-        {"value": "150", "label": "Weapons - Carrying, Possessing, etc.", "crime_against": "Society"},
-        {"value": "160", "label": "Prostitution and Commercialized Vice Total", "crime_against": "Society"},
-        {"value": "161", "label": "Prostitution and Commercialized Vice - Prostitution", "crime_against": "Society"},
-        {"value": "162", "label": "Prostitution and Commercialized Vice - Assisting or Promoting Prostitution", "crime_against": "Society"},
-        {"value": "163", "label": "Prostitution and Commercialized Vice - Purchasing Prostitution", "crime_against": "Society"},
-        {"value": "170", "label": "Sex Offenses (except forcible rape and prostitution)", "crime_against": "Person"},
-        {"value": "18", "label": "Drug Abuse Violations (Total)", "crime_against": "Society"},
-        {"value": "180", "label": "Sale/Manufacturing (Subtotal)", "crime_against": "Society"},
-        {"value": "181", "label": "Opium and Cocaine, and their derivatives (Morphine, Heroin)", "crime_against": "Society"},
-        {"value": "182", "label": "Marijuana", "crime_against": "Society"},
-        {"value": "183", "label": "Synthetic Narcotics - Manufactured Narcotics which can cause true drug addiction (Demerol, Methadones)", "crime_against": "Society"},
-        {"value": "184", "label": "Other Dangerous Non-Narcotic Drugs (Barbiturates, Benzedrine)", "crime_against": "Society"},
-        {"value": "185", "label": "Possession (Subtotal)", "crime_against": "Society"},
-        {"value": "186", "label": "same as 181", "crime_against": "Society"},
-        {"value": "187", "label": "same as 182", "crime_against": "Society"},
-        {"value": "188", "label": "same as 183", "crime_against": "Society"},
-        {"value": "189", "label": "same as 184", "crime_against": "Society"},
-        {"value": "19", "label": "Gambling (Total)", "crime_against": "Society"},
-        {"value": "191", "label": "Bookmaking (Horse and Sport Book)", "crime_against": "Society"},
-        {"value": "192", "label": "Number and Lottery", "crime_against": "Society"},
-        {"value": "193", "label": "All Other Gambling", "crime_against": "Society"},
-        {"value": "200", "label": "Offenses Against Family and Children", "crime_against": "Person"},
-        {"value": "210", "label": "Driving Under the Influence", "crime_against": "Society"},
-        {"value": "220", "label": "Liquor Laws", "crime_against": "Society"},
-        {"value": "230", "label": "Drunkenness", "crime_against": "Society"},
-        {"value": "240", "label": "Disorderly Conduct", "crime_against": "Society"},
-        {"value": "250", "label": "Vagrancy", "crime_against": "Society"},
-        {"value": "260", "label": "All Other Offenses (except traffic)", "crime_against": "Society"},
-        {"value": "270", "label": "Suspicion", "crime_against": "Society"},
-        {"value": "280", "label": "Curfew and Loitering Law Violations", "crime_against": "Society"},
-        {"value": "290", "label": "Runaways", "crime_against": "Society"},
-        {"value": "301", "label": "Human Trafficking - Commercial Sex Acts (300)", "crime_against": "Person"},
-        {"value": "302", "label": "Human Trafficking - Involuntary Servitude (310)", "crime_against": "Person"},
-        {"value": "990", "label": "(99) is assigned to Juvenile Disposition data. If included should be zero.", "crime_against": "Society"},
-        {"value": "998", "label": "Not applicable", "crime_against": None},
-        {"value": "Total", "label": "Total", "crime_against": None},
-    ]
-)
-
-
-def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(chunk_size), b""):
-            h.update(chunk)
-    return h.hexdigest()
+# Maps FBI offense codes -> human labels + broad category
+CRIMEMAP = pd.DataFrame([
+    {"value": "011", "label": "Murder and Non-Negligent Manslaughter",            "crime_against": "Person"},
+    {"value": "012", "label": "Manslaughter by Negligence",                       "crime_against": "Person"},
+    {"value": "020", "label": "Forcible Rape",                                    "crime_against": "Person"},
+    {"value": "030", "label": "Robbery",                                          "crime_against": "Person"},
+    {"value": "040", "label": "Aggravated Assault",                               "crime_against": "Person"},
+    {"value": "050", "label": "Burglary - Breaking or Entering",                  "crime_against": "Property"},
+    {"value": "060", "label": "Larceny - Theft (except motor vehicle)",            "crime_against": "Property"},
+    {"value": "070", "label": "Motor Vehicle Theft",                              "crime_against": "Property"},
+    {"value": "080", "label": "Other Assaults",                                   "crime_against": "Person"},
+    {"value": "090", "label": "Arson",                                            "crime_against": "Property"},
+    {"value": "100", "label": "Forgery and Counterfeiting",                       "crime_against": "Property"},
+    {"value": "110", "label": "Fraud",                                            "crime_against": "Property"},
+    {"value": "120", "label": "Embezzlement",                                     "crime_against": "Property"},
+    {"value": "130", "label": 'Stolen property "Buying, Receiving, Poss."',       "crime_against": "Property"},
+    {"value": "140", "label": "Vandalism",                                        "crime_against": "Property"},
+    {"value": "150", "label": "Weapons - Carrying, Possessing, etc.",             "crime_against": "Society"},
+    {"value": "160", "label": "Prostitution and Commercialized Vice Total",       "crime_against": "Society"},
+    {"value": "161", "label": "Prostitution",                                     "crime_against": "Society"},
+    {"value": "162", "label": "Assisting or Promoting Prostitution",              "crime_against": "Society"},
+    {"value": "163", "label": "Purchasing Prostitution",                          "crime_against": "Society"},
+    {"value": "170", "label": "Sex Offenses (except rape & prostitution)",        "crime_against": "Person"},
+    {"value": "18",  "label": "Drug Abuse Violations (Total)",                    "crime_against": "Society"},
+    {"value": "180", "label": "Sale/Manufacturing (Subtotal)",                    "crime_against": "Society"},
+    {"value": "181", "label": "Opium/Cocaine derivatives",                        "crime_against": "Society"},
+    {"value": "182", "label": "Marijuana",                                        "crime_against": "Society"},
+    {"value": "183", "label": "Synthetic Narcotics",                              "crime_against": "Society"},
+    {"value": "184", "label": "Other Dangerous Non-Narcotic Drugs",               "crime_against": "Society"},
+    {"value": "185", "label": "Possession (Subtotal)",                            "crime_against": "Society"},
+    {"value": "186", "label": "same as 181",                                      "crime_against": "Society"},
+    {"value": "187", "label": "same as 182",                                      "crime_against": "Society"},
+    {"value": "188", "label": "same as 183",                                      "crime_against": "Society"},
+    {"value": "189", "label": "same as 184",                                      "crime_against": "Society"},
+    {"value": "19",  "label": "Gambling (Total)",                                 "crime_against": "Society"},
+    {"value": "191", "label": "Bookmaking (Horse and Sport Book)",                "crime_against": "Society"},
+    {"value": "192", "label": "Number and Lottery",                               "crime_against": "Society"},
+    {"value": "193", "label": "All Other Gambling",                               "crime_against": "Society"},
+    {"value": "200", "label": "Offenses Against Family and Children",             "crime_against": "Person"},
+    {"value": "210", "label": "Driving Under the Influence",                      "crime_against": "Society"},
+    {"value": "220", "label": "Liquor Laws",                                      "crime_against": "Society"},
+    {"value": "230", "label": "Drunkenness",                                      "crime_against": "Society"},
+    {"value": "240", "label": "Disorderly Conduct",                               "crime_against": "Society"},
+    {"value": "250", "label": "Vagrancy",                                         "crime_against": "Society"},
+    {"value": "260", "label": "All Other Offenses (except traffic)",              "crime_against": "Society"},
+    {"value": "270", "label": "Suspicion",                                        "crime_against": "Society"},
+    {"value": "280", "label": "Curfew and Loitering Law Violations",              "crime_against": "Society"},
+    {"value": "290", "label": "Runaways",                                         "crime_against": "Society"},
+    {"value": "301", "label": "Human Trafficking - Commercial Sex Acts",          "crime_against": "Person"},
+    {"value": "302", "label": "Human Trafficking - Involuntary Servitude",        "crime_against": "Person"},
+    {"value": "990", "label": "Juvenile Disposition (should be zero)",            "crime_against": "Society"},
+    {"value": "998", "label": "Not applicable",                                   "crime_against": None},
+    {"value": "Total", "label": "Total",                                          "crime_against": None},
+])
 
 
-def _require_cols(df: pd.DataFrame, cols: list[str]) -> None:
-    missing = [c for c in cols if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}")
-
-
-def transform(tsv_path: Path) -> pd.DataFrame:
+def _transform(tsv_path: Path) -> pd.DataFrame:
+    """Read raw TSV, aggregate monthly counts, pivot by crime category."""
     df = pd.read_csv(tsv_path, sep="\t", low_memory=False, usecols=range(77))
+    require_cols(df, {"ORI", "OFFENSE"}, "crime_tsv")
 
-    _require_cols(df, ["ORI", "OFFENSE"])
+    month_cols = df.columns[33:77]
+    juv_cols = df.columns[22:31]
 
-    cols = df.columns[33:77]
-    jcols = df.columns[22:31]
-
-    df[cols] = (
-        df[cols]
+    # Clean monthly count columns
+    df[month_cols] = (
+        df[month_cols]
         .astype(str)
         .apply(lambda x: x.str.strip().str.replace(" ", "", regex=False))
         .replace({"": np.nan, "99999": np.nan, "99998": np.nan})
         .apply(pd.to_numeric, errors="coerce")
     )
-
-    df["TOTAL"] = df[cols].sum(axis=1, skipna=True)
+    df["TOTAL"] = df[month_cols].sum(axis=1, skipna=True)
 
     df["OFFENSE"] = (
-        df["OFFENSE"]
-        .astype(str)
-        .str.zfill(3)
+        df["OFFENSE"].astype(str).str.zfill(3)
         .replace({"018": "18", "019": "19"})
     )
 
-    df = df.drop(columns=list(jcols) + list(cols), errors="ignore")
-
+    df = df.drop(columns=list(juv_cols) + list(month_cols), errors="ignore")
     df = df.groupby(["ORI", "OFFENSE"], as_index=False)["TOTAL"].sum()
 
     df = (
@@ -258,61 +287,52 @@ def transform(tsv_path: Path) -> pd.DataFrame:
         )
         .reset_index()
     )
-
     df.columns.name = None
 
-    if df["ORI"].isna().any():
-        raise ValueError("Null ORI found after transform.")
-    if df.duplicated(subset=["ORI"]).any():
-        raise ValueError("Duplicate ORI found after pivot (expected 1 row per ORI).")
+    assert not df["ORI"].isna().any(), "Null ORI after transform"
+    assert not df.duplicated(subset=["ORI"]).any(), "Duplicate ORI after pivot"
 
-    for c in ["Person", "Property", "Society"]:
+    for c in ("Person", "Property", "Society"):
         if c not in df.columns:
             df[c] = 0
 
     return df[["ORI", "Person", "Property", "Society"]]
 
 
-def main() -> None:
-    p = argparse.ArgumentParser()
-    p.add_argument("--input", required=True, help="Path to source .tsv")
-    p.add_argument("--data-dir", default="data", help="Base data directory (bronze/silver)")
-    p.add_argument("--force", action="store_true", help="Overwrite outputs if they exist")
-    args = p.parse_args()
+def run(
+    input_tsv: str | Path,
+    data_dir: str | Path = "data",
+    *,
+    force: bool = False,
+) -> Path:
+    bronze, silver, _ = ensure_dirs(data_dir)
 
-    in_path = Path(args.input).expanduser().resolve()
+    in_path = Path(input_tsv).expanduser().resolve()
     if not in_path.exists():
         raise FileNotFoundError(in_path)
 
-    data_dir = Path(args.data_dir)
-    bronze_dir = data_dir / "bronze"
-    silver_dir = data_dir / "silver"
-    bronze_dir.mkdir(parents=True, exist_ok=True)
-    silver_dir.mkdir(parents=True, exist_ok=True)
+    bronze_tsv = bronze / in_path.name
+    out = silver / "crime_by_ori.parquet"
 
-    bronze_tsv = bronze_dir / in_path.name
-    silver_out = silver_dir / "crime_by_ori.parquet"
-    meta_out = silver_dir / "crime_by_ori.meta.json"
+    if not force and out.exists():
+        return out
 
-    if bronze_tsv.exists() and not args.force:
-        pass
-    else:
+    if force or not bronze_tsv.exists():
         shutil.copy2(in_path, bronze_tsv)
 
-    if silver_out.exists() and not args.force:
-        return
+    result = _transform(bronze_tsv)
+    result.to_parquet(out, index=False)
+    return out
 
-    result = transform(bronze_tsv)
-    result.to_parquet(silver_out, index=False)
 
-    meta = {
-        "bronze_tsv": str(bronze_tsv),
-        "bronze_sha256": _sha256_file(bronze_tsv),
-        "rows_silver": int(len(result)),
-        "columns_silver": list(result.columns),
-    }
-    meta_out.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+def _cli() -> None:
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--input", required=True, help="Path to source .tsv")
+    p.add_argument("--data-dir", default="data")
+    p.add_argument("--force", action="store_true")
+    args = p.parse_args()
+    print(run(args.input, args.data_dir, force=args.force))
 
 
 if __name__ == "__main__":
-    main()
+    _cli()

@@ -1,76 +1,114 @@
+# # fetch_shapes.py
 # from __future__ import annotations
 
 # from pathlib import Path
+# from urllib.parse import urlparse
+# import hashlib
+# import pandas as pd
 # import geopandas as gpd
 
 # COUNTY_GEOJSON_URL = "https://raw.githubusercontent.com/holtzy/The-Python-Graph-Gallery/master/static/data/US-counties.geojson"
 # STATES_TO_REMOVE = {"02", "15", "72"}  # AK, HI, PR
 
 
-# def build_county_shapes(artifacts_dir: str | Path = "artifacts") -> Path:
-#     artifacts_dir = Path(artifacts_dir)
-#     outdir = artifacts_dir
-#     outdir.mkdir(parents=True, exist_ok=True)
+# def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+#     h = hashlib.sha256()
+#     with path.open("rb") as f:
+#         for chunk in iter(lambda: f.read(chunk_size), b""):
+#             h.update(chunk)
+#     return h.hexdigest()
 
-#     gdf = gpd.read_file(COUNTY_GEOJSON_URL)
-#     gdf = gdf[~gdf["STATE"].isin(STATES_TO_REMOVE)].copy()
 
-#     # Standardize join key
+# def build_county_shapes(
+#     data_dir: str | Path = "data",
+#     *,
+#     force_download: bool = False,
+# ) -> Path:
+#     data_dir = Path(data_dir)
+#     bronze_dir = data_dir / "bronze"
+#     silver_dir = data_dir / "silver"
+#     bronze_dir.mkdir(parents=True, exist_ok=True)
+#     silver_dir.mkdir(parents=True, exist_ok=True)
+
+#     geojson_name = Path(urlparse(COUNTY_GEOJSON_URL).path).name or "us-counties.geojson"
+#     bronze_geojson = bronze_dir / geojson_name
+
+#     if force_download or not bronze_geojson.exists():
+#         gdf_raw = gpd.read_file(COUNTY_GEOJSON_URL)
+#         gdf_raw.to_file(bronze_geojson, driver="GeoJSON")
+
+#     gdf = gpd.read_file(bronze_geojson)
+
+#     for col in ["STATE", "COUNTY"]:
+#         if col not in gdf.columns:
+#             raise ValueError(f"Missing required column: {col}")
+
+#     gdf = gdf[~gdf["STATE"].astype(str).isin(STATES_TO_REMOVE)].copy()
+
 #     gdf["STATE"] = gdf["STATE"].astype(str).str.zfill(2)
 #     gdf["COUNTY"] = gdf["COUNTY"].astype(str).str.zfill(3)
 #     gdf["GEO_ID"] = gdf["STATE"] + gdf["COUNTY"]
 
-#     outpath = outdir / "us_counties_shapes.parquet"
+#     if gdf["geometry"].isna().any():
+#         raise ValueError("Null geometries found.")
+#     if gdf.duplicated(subset=["GEO_ID"]).any():
+#         raise ValueError("Duplicate GEO_ID values found.")
+#     if gdf["GEO_ID"].str.len().ne(5).any():
+#         raise ValueError("Invalid GEO_ID length detected (expected 5).")
+
+#     outpath = silver_dir / "us_counties_shapes.parquet"
 #     gdf.to_parquet(outpath, index=False)
+
+#     meta_path = outpath.with_suffix(".meta.json")
+#     meta = {
+#         "source_url": COUNTY_GEOJSON_URL,
+#         "bronze_geojson": str(bronze_geojson),
+#         "bronze_sha256": _sha256_file(bronze_geojson),
+#         "rows_silver": int(len(gdf)),
+#         "columns_silver": list(gdf.columns),
+#         "crs": str(gdf.crs),
+#     }
+#     pd.Series(meta).to_json(meta_path)
+
 #     return outpath
 
 
 # if __name__ == "__main__":
 #     print(build_county_shapes())
 
+"""Download US county GeoJSON and save as a clean parquet with WKB geometry."""
 from __future__ import annotations
 
 from pathlib import Path
 from urllib.parse import urlparse
-import hashlib
-import pandas as pd
-import geopandas as gpd
 
-COUNTY_GEOJSON_URL = "https://raw.githubusercontent.com/holtzy/The-Python-Graph-Gallery/master/static/data/US-counties.geojson"
+import geopandas as gpd
+import pandas as pd
+
+from _utils import ensure_dirs, require_cols
+
+COUNTY_GEOJSON_URL = (
+    "https://raw.githubusercontent.com/holtzy/"
+    "The-Python-Graph-Gallery/master/static/data/US-counties.geojson"
+)
+
 STATES_TO_REMOVE = {"02", "15", "72"}  # AK, HI, PR
 
 
-def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(chunk_size), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def build_county_shapes(
-    data_dir: str | Path = "data",
-    *,
-    force_download: bool = False,
-) -> Path:
-    data_dir = Path(data_dir)
-    bronze_dir = data_dir / "bronze"
-    silver_dir = data_dir / "silver"
-    bronze_dir.mkdir(parents=True, exist_ok=True)
-    silver_dir.mkdir(parents=True, exist_ok=True)
+def run(data_dir: str | Path = "data", *, force: bool = False) -> Path:
+    bronze, silver, _ = ensure_dirs(data_dir)
 
     geojson_name = Path(urlparse(COUNTY_GEOJSON_URL).path).name or "us-counties.geojson"
-    bronze_geojson = bronze_dir / geojson_name
+    bronze_geojson = bronze / geojson_name
 
-    if force_download or not bronze_geojson.exists():
+    # --- bronze ---------------------------------------------------------
+    if force or not bronze_geojson.exists():
         gdf_raw = gpd.read_file(COUNTY_GEOJSON_URL)
         gdf_raw.to_file(bronze_geojson, driver="GeoJSON")
 
+    # --- silver ---------------------------------------------------------
     gdf = gpd.read_file(bronze_geojson)
-
-    for col in ["STATE", "COUNTY"]:
-        if col not in gdf.columns:
-            raise ValueError(f"Missing required column: {col}")
+    require_cols(gdf, {"STATE", "COUNTY"}, "county_shapes")
 
     gdf = gdf[~gdf["STATE"].astype(str).isin(STATES_TO_REMOVE)].copy()
 
@@ -78,29 +116,14 @@ def build_county_shapes(
     gdf["COUNTY"] = gdf["COUNTY"].astype(str).str.zfill(3)
     gdf["GEO_ID"] = gdf["STATE"] + gdf["COUNTY"]
 
-    if gdf["geometry"].isna().any():
-        raise ValueError("Null geometries found.")
-    if gdf.duplicated(subset=["GEO_ID"]).any():
-        raise ValueError("Duplicate GEO_ID values found.")
-    if gdf["GEO_ID"].str.len().ne(5).any():
-        raise ValueError("Invalid GEO_ID length detected (expected 5).")
+    assert not gdf["geometry"].isna().any(), "Null geometries found"
+    assert not gdf.duplicated(subset=["GEO_ID"]).any(), "Duplicate GEO_ID values"
+    assert gdf["GEO_ID"].str.len().eq(5).all(), "Invalid GEO_ID length"
 
-    outpath = silver_dir / "us_counties_shapes.parquet"
-    gdf.to_parquet(outpath, index=False)
-
-    meta_path = outpath.with_suffix(".meta.json")
-    meta = {
-        "source_url": COUNTY_GEOJSON_URL,
-        "bronze_geojson": str(bronze_geojson),
-        "bronze_sha256": _sha256_file(bronze_geojson),
-        "rows_silver": int(len(gdf)),
-        "columns_silver": list(gdf.columns),
-        "crs": str(gdf.crs),
-    }
-    pd.Series(meta).to_json(meta_path)
-
-    return outpath
+    out = silver / "us_counties_shapes.parquet"
+    gdf.to_parquet(out, index=False)
+    return out
 
 
 if __name__ == "__main__":
-    print(build_county_shapes())
+    print(run())
