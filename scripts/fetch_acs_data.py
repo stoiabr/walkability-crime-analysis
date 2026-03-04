@@ -103,7 +103,7 @@ ACS_VARS = {
     "B25003_003E": "renter_occupied",
     "B08131_001E": "travel_time_to_work",
     "B08301_001E": "means_of_transport",
-    "B992701_001E": "health_insance_coverage",
+    "B992701_001E": "health_insurance_coverage",
     "B99172_001E": "poverty_status_for_families",
     "B29003_001E": "poverty_status",
     "B99281_001E": "household_internet_access",
