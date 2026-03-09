@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pandas as pd
+import numpy as np
 
 from utils import ensure_dirs, require_cols, zfill_col
 import ssl 
@@ -72,6 +73,20 @@ def run(data_dir: str | Path = "data", *, force: bool = False) -> Path:
         )
         .reset_index()
     )
+
+    def _wmean(g):
+        w = g["Ac_Land"]
+        if w.sum() == 0:
+            return np.nan
+        return np.average(g["NatWalkInd"], weights=w)
+
+    wmean = (
+        walk.groupby(["STATEFP", "COUNTYFP"], dropna=False)
+        .apply(_wmean, include_groups=False)
+        .rename("walkability_wmean")
+        .reset_index()
+    )
+    county = county.merge(wmean, on=["STATEFP", "COUNTYFP"])
 
     county["GEO_ID"] = county["STATEFP"] + county["COUNTYFP"]
     county["walkability_range"] = county["walkability_max"] - county["walkability_min"]
