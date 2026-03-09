@@ -9,8 +9,6 @@ import pandas as pd
 import numpy as np
 
 from utils import ensure_dirs, require_cols, zfill_col
-import ssl 
-ssl._create_default_https_context = ssl._create_unverified_context
 EPA_WALK_CSV_URL = (
     "http://edg.epa.gov/EPADataCommons/public/OA/"
     "EPA_SmartLocationDatabase_V3_Jan_2021_Final.csv"

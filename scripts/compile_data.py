@@ -13,8 +13,8 @@ from utils import ensure_dirs, require_cols
 
 ### note: ensure caution when using an unverified context
 ### if errors while trying to query, uncomment the following section: 
-# import ssl
-# ssl._create_default_https_context = ssl._create_unverified_context
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 
 
 def run(data_dir: str | Path = "data") -> Path:
@@ -76,7 +76,7 @@ def run(data_dir: str | Path = "data") -> Path:
         raise ValueError("No rows after agency–crime merge")
 
     crime_county = (
-        merged.groupby(["STATE", "COUNTY"], as_index=False)
+        merged.groupby(["STATE", "COUNTY", "GEO_ID", "state_name", "state_abbr", "county_name"], as_index=False)
         [["Person", "Property", "Society"]].sum()
     )
 
